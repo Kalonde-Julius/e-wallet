@@ -26,7 +26,7 @@ async function initDB() {
 }
 
 app.get('/', (req, res) => {
-  res.send('Hello, Julius!');
+  res.send('Hello, Vigilant !');
 });
 
 
