@@ -1,10 +1,14 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import { sql } from './config/db.js';
+import rateLimiter from './middleware/rateLimiter.js';
 
 dotenv.config();
 
 const app = express();
+
+// Apply rate limiting middleware to all routes
+app.use(rateLimiter);
 
 // Middleware to parse JSON bodies
 app.use(express.json());
@@ -24,7 +28,7 @@ async function initDB() {
     console.log('Database initialized successfully');
   } catch (error) {         
     console.error('Error connecting to the DB:', error);
-    process.exit(1); // status code 1 means failure, 0 means success
+    process.exit(1);
   }
 }
 
@@ -37,7 +41,9 @@ app.get('/api/transactions/:user_id', async (req, res) => {
     const { user_id } = req.params;
 
     const transactions = await sql`
-      SELECT * FROM transactions WHERE user_id = ${user_id} ORDER BY created_at DESC`;
+      SELECT * FROM transactions 
+      WHERE LOWER(user_id) = LOWER(${user_id}) 
+      ORDER BY created_at DESC`;
 
     res.status(200).json(transactions);
   } catch (error) {
@@ -47,16 +53,17 @@ app.get('/api/transactions/:user_id', async (req, res) => {
 });
 
 app.post('/api/transactions', async (req, res) => {
- 
   try {
     const { user_id, title, amount, category } = req.body; 
    
     if (!user_id || !title || amount === undefined || !category) {
       return res.status(400).json({ message: 'All fields are required' });
     }
+
     const transaction = await sql`
       INSERT INTO transactions (user_id, title, amount, category)   
-      VALUES (${user_id}, ${title}, ${amount}, ${category}) RETURNING * `;
+      VALUES (${user_id}, ${title}, ${amount}, ${category}) RETURNING *`;
+
     res.status(201).json(transaction[0]);
   } catch (error) {
     console.error('Error inserting transaction:', error);
@@ -90,25 +97,25 @@ app.get('/api/transactions/summary/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Calculate balance (sum of all amounts)
     const balanceResult = await sql`
-      SELECT COALESCE(SUM(amount), 0) as balance FROM transactions 
-      WHERE user_id = ${userId}`;
+      SELECT COALESCE(SUM(amount), 0) as balance 
+      FROM transactions 
+      WHERE LOWER(user_id) = LOWER(${userId})`;
 
-    // Calculate income (positive amounts)
     const incomeResult = await sql`
-      SELECT COALESCE(SUM(amount), 0) as income FROM transactions 
-      WHERE user_id = ${userId} AND amount > 0`;
+      SELECT COALESCE(SUM(amount), 0) as income 
+      FROM transactions 
+      WHERE LOWER(user_id) = LOWER(${userId}) AND amount > 0`;
 
-    // Calculate expenses (negative amounts)
     const expenseResult = await sql`
-      SELECT COALESCE(SUM(amount), 0) as expense FROM transactions 
-      WHERE user_id = ${userId} AND amount < 0`
+      SELECT COALESCE(SUM(amount), 0) as expense 
+      FROM transactions 
+      WHERE LOWER(user_id) = LOWER(${userId}) AND amount < 0`;
 
     res.status(200).json({
-      income: incomeResult[0].income,
-      expense: expenseResult[0].expense,
-      balance: balanceResult[0].balance,
+      income: Number(incomeResult[0].income).toFixed(2),
+      expense: Math.abs(Number(expenseResult[0].expense)).toFixed(2),
+      balance: Number(balanceResult[0].balance).toFixed(2),
     });
   } catch (error) {
     console.error('Error fetching transaction summary:', error);
@@ -116,6 +123,11 @@ app.get('/api/transactions/summary/:userId', async (req, res) => {
   }
 });
 
+// Global error handler to prevent crashes
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ message: 'Internal Server Error' });
+});
 
 initDB().then(() => {
   app.listen(PORT, () => {
